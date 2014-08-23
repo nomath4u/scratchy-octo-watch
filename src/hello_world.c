@@ -2,6 +2,9 @@
 
 static Window *window;
 static TextLayer *text_layer;
+short xmax = 0;
+short ymax = 0;
+short zmax = 0;
 
 
 static void select_click_handler(ClickRecognizerRef recognizer, void *context) {
@@ -25,10 +28,71 @@ static void click_config_provider(void *context) {
   window_single_click_subscribe(BUTTON_ID_DOWN, down_click_handler);
 }
 
+/*Normalize at 4000, the max value so that the smallest number is 0 instead of negative*/
+static uint16_t mag_data(int16_t val) {
+  int16_t newval = val + 4000;
+  if (newval < 0){ //There was a huge pebble problem if this happens
+    newval = 0;
+  }
+  return newval;
+}
+
 static void accel_data_handler(AccelData *data, uint32_t num_samples){
-  // Process 10 events every second
-  // For now just vibrate regardless of data for testing
-  vibes_short_pulse();
+  // Process 50 events every 5 seconds
+  uint32_t ax = 0;
+  uint32_t ay = 0;
+  uint32_t az = 0;
+  bool vibed = false;
+  AccelData *d = data; //We are going to step through each sample with pointers!!!!
+  for (uint32_t i = 0; i < num_samples; i++, d++){
+    if(d->did_vibrate){
+      vibed = true; //Can't use this set because getting a message may set up the scratch alarm
+      break;
+    }
+
+    ax += mag_data(d->x);
+    ay += mag_data(d->y);
+    az += mag_data(d->z);
+
+  }
+  if(vibed){ return; } //Data is bad
+  
+  /*Averages*/
+  ax /= num_samples;
+  ay /= num_samples;
+  az /= num_samples;
+  
+  /*Now find deviations from the average, if they are big we need to wake the user up*/
+  AccelData *a = data;
+  uint16_t biggest = 0; // Where we are going to show the biggest deviation and what we are going to check if is too big.
+  for (uint32_t i = 0; i < num_samples; i++, a++){
+    uint16_t x = mag_data(a->x);
+    uint16_t y = mag_data(a->y);
+    uint16_t z = mag_data(a->z);
+
+    if ( x < ax){
+      x = ax -x;
+    } else {
+      x -= ax;
+    }
+    if ( y < ay){
+      y = ay -y;
+    } else {
+      y -= ay;
+    }
+    if ( z < az){
+      z = az -z;
+    } else {
+      z -= az;
+    }
+    
+    if (x > biggest) biggest = x;
+    if (y > biggest) biggest = y;
+    if (z > biggest) biggest = z;
+  } 
+  /*For now just log the data so we can decide what number we need, in production. Check if it is too big and then start vibrating*/
+  APP_LOG(APP_LOG_LEVEL_DEBUG, "Biggest deviation: %d", biggest);
+   
 }
 
 
@@ -49,7 +113,7 @@ static void window_unload(Window *window) {
 static void init(void) {
   window = window_create();
   window_set_click_config_provider(window, click_config_provider);
-  accel_data_service_subscribe(10, accel_data_handler);
+  accel_data_service_subscribe(50, accel_data_handler); 
   accel_service_set_sampling_rate(ACCEL_SAMPLING_10HZ);
   window_set_window_handlers(window, (WindowHandlers) {
     .load = window_load,
