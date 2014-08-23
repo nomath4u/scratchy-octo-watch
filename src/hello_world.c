@@ -5,33 +5,7 @@ static TextLayer *text_layer;
 short xmax = 0;
 short ymax = 0;
 short zmax = 0;
-AppTimer *timer;
-
-
-static void select_click_handler(ClickRecognizerRef recognizer, void *context) {
-  text_layer_set_text(text_layer, "Double");
-  //vibes_double_pulse();
-  app_timer_cancel(timer); //Kill the callback timer recursion
-}
-
-static void up_click_handler(ClickRecognizerRef recognizer, void *context) {
-  text_layer_set_text(text_layer, "Long");
-  //vibes_long_pulse();
-}
-
-static void down_click_handler(ClickRecognizerRef recognizer, void *context) {
-  text_layer_set_text(text_layer, "Short");
-  //vibes_short_pulse();
-}
-
-static void click_config_provider(void *context) {
-  window_single_click_subscribe(BUTTON_ID_SELECT, select_click_handler);
-  window_single_click_subscribe(BUTTON_ID_UP, up_click_handler);
-  window_single_click_subscribe(BUTTON_ID_DOWN, down_click_handler);
-}
-
-
-
+AppTimer* timer = NULL;
 
 /*Normalize at 4000, the max value so that the smallest number is 0 instead of negative*/
 static uint16_t mag_data(int16_t val) {
@@ -42,26 +16,28 @@ static uint16_t mag_data(int16_t val) {
   return newval;
 }
 
-void timer_callback(void *data){
+static void timer_callback(void *data){
   vibes_long_pulse();
-  timer = app_timer_register(1000, (AppTimerCallback) timer_callback, NULL); //So it perpetuates itself.
+  timer = app_timer_register(1000, timer_callback, NULL); //So it perpetuates itself.
 }
 
 static void setup_timer(){
-  timer = app_timer_register(1000, (AppTimerCallback) timer_callback, NULL);
+  timer = app_timer_register(1000,  timer_callback, NULL);
+  //We may need to put some sort of delay here so that it doesn't trigger itself from an old vibrate because the accelerometer pack does not seem to be able to tell if it vibrated mid packet from these
+  accel_data_service_unsubscribe(); //So that we don't poll accelerometer data while vibrating
+  text_layer_set_text(text_layer, "Vibrating");
 }
 
 static void accel_data_handler(AccelData *data, uint32_t num_samples){
-  // Process 50 events every 5 seconds
+  // Process 10 events every 1 seconds
   uint32_t ax = 0;
   uint32_t ay = 0;
   uint32_t az = 0;
-  bool vibed = false;
+  bool vibed = data->did_vibrate;
   AccelData *d = data; //We are going to step through each sample with pointers!!!!
   for (uint32_t i = 0; i < num_samples; i++, d++){
-    if(d->did_vibrate){
-      vibed = true; //Can't use this set because getting a message may set up the scratch alarm
-      break;
+    if(vibed){
+      return; //Data is bad
     }
 
     ax += mag_data(d->x);
@@ -69,7 +45,6 @@ static void accel_data_handler(AccelData *data, uint32_t num_samples){
     az += mag_data(d->z);
 
   }
-  if(vibed){ return; } //Data is bad
   
   /*Averages*/
   ax /= num_samples;
@@ -106,21 +81,41 @@ static void accel_data_handler(AccelData *data, uint32_t num_samples){
   } 
   /*For now just log the data so we can decide what number we need, in production. Check if it is too big and then start vibrating*/
   APP_LOG(APP_LOG_LEVEL_DEBUG, "Biggest deviation: %d", biggest);
-  if(biggest > 1000){
+  if(biggest > 1300){
     setup_timer();
   }
    
 }
 
 
+static void select_click_handler(ClickRecognizerRef recognizer, void *context) {
+  app_timer_cancel(timer); //Kill the callback timer recursion
+  
+  accel_data_service_subscribe(10, accel_data_handler); //Resubscribe because no longer vibrating
+  text_layer_set_text(text_layer, "Reading Accel");
+  
+}
 
+static void up_click_handler(ClickRecognizerRef recognizer, void *context) {
+  //vibes_long_pulse();
+}
+
+static void down_click_handler(ClickRecognizerRef recognizer, void *context) {
+  //vibes_short_pulse();
+}
+
+static void click_config_provider(void *context) {
+  window_single_click_subscribe(BUTTON_ID_SELECT, select_click_handler);
+  window_single_click_subscribe(BUTTON_ID_UP, up_click_handler);
+  window_single_click_subscribe(BUTTON_ID_DOWN, down_click_handler);
+}
 
 static void window_load(Window *window) {
   Layer *window_layer = window_get_root_layer(window);
   GRect bounds = layer_get_bounds(window_layer);
 
   text_layer = text_layer_create((GRect) { .origin = { 0, 72 }, .size = { bounds.size.w, 20 } });
-  text_layer_set_text(text_layer, "Press a button");
+  text_layer_set_text(text_layer, "Reading Accel");
   text_layer_set_text_alignment(text_layer, GTextAlignmentCenter);
   layer_add_child(window_layer, text_layer_get_layer(text_layer));
 }
@@ -131,9 +126,9 @@ static void window_unload(Window *window) {
 
 static void init(void) {
   window = window_create();
-  window_set_click_config_provider(window, click_config_provider);
   accel_data_service_subscribe(10, accel_data_handler); 
   accel_service_set_sampling_rate(ACCEL_SAMPLING_10HZ);
+  window_set_click_config_provider(window, click_config_provider);
   window_set_window_handlers(window, (WindowHandlers) {
     .load = window_load,
     .unload = window_unload,
@@ -144,6 +139,7 @@ static void init(void) {
 
 static void deinit(void) {
   window_destroy(window);
+  accel_data_service_unsubscribe();
 }
 
 
