@@ -5,21 +5,23 @@ static TextLayer *text_layer;
 short xmax = 0;
 short ymax = 0;
 short zmax = 0;
+AppTimer *timer;
 
 
 static void select_click_handler(ClickRecognizerRef recognizer, void *context) {
   text_layer_set_text(text_layer, "Double");
-  vibes_double_pulse();
+  //vibes_double_pulse();
+  app_timer_cancel(timer); //Kill the callback timer recursion
 }
 
 static void up_click_handler(ClickRecognizerRef recognizer, void *context) {
   text_layer_set_text(text_layer, "Long");
-  vibes_long_pulse();
+  //vibes_long_pulse();
 }
 
 static void down_click_handler(ClickRecognizerRef recognizer, void *context) {
   text_layer_set_text(text_layer, "Short");
-  vibes_short_pulse();
+  //vibes_short_pulse();
 }
 
 static void click_config_provider(void *context) {
@@ -28,6 +30,9 @@ static void click_config_provider(void *context) {
   window_single_click_subscribe(BUTTON_ID_DOWN, down_click_handler);
 }
 
+
+
+
 /*Normalize at 4000, the max value so that the smallest number is 0 instead of negative*/
 static uint16_t mag_data(int16_t val) {
   int16_t newval = val + 4000;
@@ -35,6 +40,15 @@ static uint16_t mag_data(int16_t val) {
     newval = 0;
   }
   return newval;
+}
+
+void timer_callback(void *data){
+  vibes_long_pulse();
+  timer = app_timer_register(1000, (AppTimerCallback) timer_callback, NULL); //So it perpetuates itself.
+}
+
+static void setup_timer(){
+  timer = app_timer_register(1000, (AppTimerCallback) timer_callback, NULL);
 }
 
 static void accel_data_handler(AccelData *data, uint32_t num_samples){
@@ -92,8 +106,13 @@ static void accel_data_handler(AccelData *data, uint32_t num_samples){
   } 
   /*For now just log the data so we can decide what number we need, in production. Check if it is too big and then start vibrating*/
   APP_LOG(APP_LOG_LEVEL_DEBUG, "Biggest deviation: %d", biggest);
+  if(biggest > 1000){
+    setup_timer();
+  }
    
 }
+
+
 
 
 static void window_load(Window *window) {
@@ -113,7 +132,7 @@ static void window_unload(Window *window) {
 static void init(void) {
   window = window_create();
   window_set_click_config_provider(window, click_config_provider);
-  accel_data_service_subscribe(50, accel_data_handler); 
+  accel_data_service_subscribe(10, accel_data_handler); 
   accel_service_set_sampling_rate(ACCEL_SAMPLING_10HZ);
   window_set_window_handlers(window, (WindowHandlers) {
     .load = window_load,
